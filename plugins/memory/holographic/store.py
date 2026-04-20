@@ -82,7 +82,27 @@ _TRUST_MIN       =  0.0
 _TRUST_MAX       =  1.0
 
 # Entity extraction patterns
-_RE_CAPITALIZED  = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b')
+_RE_CAPITALIZED  = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b')
+
+# Common capitalized words that are NOT entities (sentence starters, pronouns, etc.)
+_NON_ENTITY_WORDS = frozenset({
+    "The", "A", "An", "This", "That", "These", "Those",
+    "My", "Your", "His", "Her", "Our", "Their", "Its",
+    "I", "We", "You", "He", "She", "It", "They",
+    "Is", "Are", "Was", "Were", "Be", "Been", "Being",
+    "Have", "Has", "Had", "Do", "Does", "Did",
+    "Will", "Would", "Could", "Should", "May", "Might",
+    "Can", "Must", "Shall",
+    "If", "Or", "And", "But", "Not", "No", "So",
+    "In", "On", "At", "To", "For", "By", "With", "From",
+    "Up", "Down", "Out", "Off", "Over", "Under",
+    "All", "Some", "Any", "Each", "Every", "Both",
+    "How", "What", "When", "Where", "Which", "Who", "Why",
+    "There", "Here", "Then", "Now", "Just", "Only",
+    "Also", "Even", "Still", "Already", "Yet",
+    "Yes", "No", "True", "False", "Null", "None",
+    "Skip", "Note", "Noted", "Good", "Great", "Acknowledged",
+})
 _RE_DOUBLE_QUOTE = re.compile(r'"([^"]+)"')
 _RE_SINGLE_QUOTE = re.compile(r"'([^']+)'")
 _RE_AKA          = re.compile(
@@ -144,6 +164,7 @@ class MemoryStore:
         content: str,
         category: str = "general",
         tags: str = "",
+        trust: float | None = None,
     ) -> int:
         """Insert a fact and return its fact_id.
 
@@ -162,7 +183,7 @@ class MemoryStore:
                     INSERT INTO facts (content, category, tags, trust_score)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (content, category, tags, self.default_trust),
+                    (content, category, tags, _clamp_trust(trust if trust is not None else self.default_trust)),
                 )
                 self._conn.commit()
                 fact_id: int = cur.lastrowid  # type: ignore[assignment]
@@ -395,7 +416,7 @@ class MemoryStore:
         """Extract entity candidates from text using simple regex rules.
 
         Rules applied (in order):
-        1. Capitalized multi-word phrases  e.g. "John Doe"
+        1. Capitalized words/phrases (single or multi-word, filtering common non-entities)
         2. Double-quoted terms             e.g. "Python"
         3. Single-quoted terms             e.g. 'pytest'
         4. AKA patterns                    e.g. "Guido aka BDFL" -> two entities
@@ -412,7 +433,11 @@ class MemoryStore:
                 candidates.append(stripped)
 
         for m in _RE_CAPITALIZED.finditer(text):
-            _add(m.group(1))
+            name = m.group(1)
+            # Skip single-word common non-entities (allow multi-word through)
+            if " " not in name and name in _NON_ENTITY_WORDS:
+                continue
+            _add(name)
 
         for m in _RE_DOUBLE_QUOTE.finditer(text):
             _add(m.group(1))
