@@ -685,14 +685,15 @@ def delegate_task(
     max_iterations: Optional[int] = None,
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
+    model: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
 
     Supports two modes:
-      - Single: provide goal (+ optional context, toolsets)
-      - Batch:  provide tasks array [{goal, context, toolsets}, ...]
+      - Single: provide goal (+ optional context, toolsets, model)
+      - Batch:  provide tasks array [{goal, context, toolsets, model}, ...]
 
     Returns JSON with results array, one entry per task.
     """
@@ -737,7 +738,7 @@ def delegate_task(
             )
         task_list = tasks
     elif goal and isinstance(goal, str) and goal.strip():
-        task_list = [{"goal": goal, "context": context, "toolsets": toolsets}]
+        task_list = [{"goal": goal, "context": context, "toolsets": toolsets, "model": model}]
     else:
         return tool_error("Provide either 'goal' (single task) or 'tasks' (batch).")
 
@@ -770,7 +771,7 @@ def delegate_task(
         for i, t in enumerate(task_list):
             child = _build_child_agent(
                 task_index=i, goal=t["goal"], context=t.get("context"),
-                toolsets=t.get("toolsets") or toolsets, model=creds["model"],
+                toolsets=t.get("toolsets") or toolsets, model=t.get("model") or creds["model"],
                 max_iterations=effective_max_iter, task_count=n_tasks, parent_agent=parent_agent,
                 override_provider=creds["provider"], override_base_url=creds["base_url"],
                 override_api_key=creds["api_key"],
@@ -1137,6 +1138,13 @@ DELEGATE_TASK_SCHEMA = {
                             "items": {"type": "string"},
                             "description": "Per-task ACP args override.",
                         },
+                        "model": {
+                            "type": "string",
+                            "description": (
+                                "Per-task model override. Takes precedence over top-level "
+                                "'model' and delegation.model in config.yaml."
+                            ),
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -1146,7 +1154,7 @@ DELEGATE_TASK_SCHEMA = {
                 "description": (
                     "Batch mode: tasks to run in parallel (limit configurable via delegation.max_concurrent_children, default 3). Each gets "
                     "its own subagent with isolated context and terminal session. "
-                    "When provided, top-level goal/context/toolsets are ignored."
+                    "When provided, top-level goal/context/toolsets/model are ignored."
                 ),
             },
             "max_iterations": {
@@ -1154,6 +1162,14 @@ DELEGATE_TASK_SCHEMA = {
                 "description": (
                     "Max tool-calling turns per subagent (default: 50). "
                     "Only set lower for simple tasks."
+                ),
+            },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Model for the subagent to use (e.g. 'kimi-k2.6:cloud', 'glm-5.1:cloud'). "
+                    "When set, overrides the delegation.model configured in config.yaml. "
+                    "Useful for routing specific tasks to different models."
                 ),
             },
             "acp_command": {
@@ -1194,6 +1210,7 @@ registry.register(
         max_iterations=args.get("max_iterations"),
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
+        model=args.get("model"),
         parent_agent=kw.get("parent_agent")),
     check_fn=check_delegate_requirements,
     emoji="🔀",
