@@ -85,6 +85,7 @@ from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    THINKING_FRAMEWORKS,
     build_nous_subscription_prompt,
 )
 from agent.model_metadata import (
@@ -4000,12 +4001,13 @@ class AIAgent:
         """
         # Layers (in order):
         #   1. Agent identity — SOUL.md when available, else DEFAULT_AGENT_IDENTITY
-        #   2. User / gateway system prompt (if provided)
-        #   3. Persistent memory (frozen snapshot)
-        #   4. Skills guidance (if skills tools are loaded)
-        #   5. Context files (AGENTS.md, .cursorrules — SOUL.md excluded here when used as identity)
-        #   6. Current date & time (frozen at build time)
-        #   7. Platform-specific formatting hint
+        #   2. Thinking Frameworks — Idea Compass + Six Hats (always, every agent)
+        #   3. User / gateway system prompt (if provided)
+        #   4. Persistent memory (frozen snapshot)
+        #   5. Skills guidance (if skills tools are loaded)
+        #   6. Context files (AGENTS.md, .cursorrules — SOUL.md excluded here when used as identity)
+        #   7. Current date & time (frozen at build time)
+        #   8. Platform-specific formatting hint
 
         # Try SOUL.md as primary identity (unless context files are skipped)
         _soul_loaded = False
@@ -4018,6 +4020,9 @@ class AIAgent:
         if not _soul_loaded:
             # Fallback to hardcoded identity
             prompt_parts = [DEFAULT_AGENT_IDENTITY]
+
+        # Foundational thinking frameworks — always injected, every agent, every time
+        prompt_parts.append(THINKING_FRAMEWORKS)
 
         # Tool-aware behavioral guidance: only inject when the tools are loaded
         tool_guidance = []
