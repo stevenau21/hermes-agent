@@ -161,6 +161,26 @@ MEMORY_GUIDANCE = (
     "workflows belong in skills, not memory."
 )
 
+# -----------------------------------------------------------------------------
+# Identity Architecture — Layer 2: Thinking (Neural/Methodology)
+#   System Prompt = Neural Network (HOW to think)
+#   Memory        = Data (WHAT is known)
+#   Skills        = Tools (WHAT to do)
+# This layer is injected into every agent unconditionally.
+# -----------------------------------------------------------------------------
+MEMORY_LAYER = (
+    "## Identity Architecture — Memory Layer\n"
+    "\n"
+    "Memory is the data layer of the Identity Architecture:\n"
+    "- **System Prompt** = Neural Network (thinking methodology — Idea Compass, Six Hats)\n"
+    "- **Memory** = Data (user facts, preferences, environment, conventions)\n"
+    "- **Skills** = Tools (reusable procedural knowledge)\n"
+    "\n"
+    "Memory is injected into every turn. Keep it compact — only durable facts that "
+    "prevent the user from having to repeat themselves. Store procedures and workflows "
+    "in skills, not memory."
+)
+
 SESSION_SEARCH_GUIDANCE = (
     "When the user references something from a past conversation or you suspect "
     "relevant cross-session context exists, use session_search to recall it before "

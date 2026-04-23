@@ -84,7 +84,7 @@ from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
-    MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    MEMORY_GUIDANCE, MEMORY_LAYER, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
     THINKING_FRAMEWORKS,
     build_nous_subscription_prompt,
 )
@@ -3999,15 +3999,20 @@ class AIAgent:
         rebuilt after context compression events. This ensures the system prompt
         is stable across all turns in a session, maximizing prefix cache hits.
         """
-        # Layers (in order):
-        #   1. Agent identity — SOUL.md when available, else DEFAULT_AGENT_IDENTITY
-        #   2. Thinking Frameworks — Idea Compass + Six Hats (always, every agent)
-        #   3. User / gateway system prompt (if provided)
-        #   4. Persistent memory (frozen snapshot)
-        #   5. Skills guidance (if skills tools are loaded)
-        #   6. Context files (AGENTS.md, .cursorrules — SOUL.md excluded here when used as identity)
-        #   7. Current date & time (frozen at build time)
-        #   8. Platform-specific formatting hint
+        # Identity Architecture — system prompt layers (in order):
+        #   Layer 1: Agent identity — SOUL.md when available, else DEFAULT_AGENT_IDENTITY
+        #   Layer 2: Thinking Frameworks — Idea Compass + Six Hats (always, every agent)
+        #   Layer 3: Memory Layer — Identity Architecture explanation + guidance (always)
+        #   Layer 4: Tool guidance — Memory, Session Search, Skills (tool-gated)
+        #   Layer 5: Nous subscription block (if active)
+        #   Layer 6: Tool-use enforcement (model-gated)
+        #   Layer 7: User / gateway system prompt (if provided)
+        #   Layer 8: Persistent memory snapshot (frozen)
+        #   Layer 9: External memory provider block (additive)
+        #   Layer 10: Skills index (tool-gated)
+        #   Layer 11: Context files (AGENTS.md, .cursorrules — SOUL.md excluded here when used as identity)
+        #   Layer 12: Current date & time, session ID, model/provider
+        #   Layer 13: Platform-specific formatting hint
 
         # Try SOUL.md as primary identity (unless context files are skipped)
         _soul_loaded = False
@@ -4023,6 +4028,9 @@ class AIAgent:
 
         # Foundational thinking frameworks — always injected, every agent, every time
         prompt_parts.append(THINKING_FRAMEWORKS)
+
+        # Identity Architecture — Memory Layer explanation
+        prompt_parts.append(MEMORY_LAYER)
 
         # Tool-aware behavioral guidance: only inject when the tools are loaded
         tool_guidance = []
