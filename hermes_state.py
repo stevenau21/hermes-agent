@@ -2776,20 +2776,37 @@ class SessionDB:
         removed hundreds of sessions, the file stays bloated unless we
         explicitly VACUUM.
 
-        VACUUM rewrites the entire DB, so it's expensive (seconds per
-        100MB) and cannot run inside a transaction. It also acquires an
-        exclusive lock, so callers must ensure no other writers are
-        active. Safe to call at startup before the gateway/CLI starts
-        serving traffic.
+        VACUUM INTO rewrites the DB into a separate temp file, then atomically
+        renames it over the original.  This is crash-safe: if the process is
+        killed mid-vacuum, the original state.db is untouched.  The old in-place
+        VACUUM would truncate the original file before the rewrite completed,
+        corrupting the DB on forced shutdown (SIGKILL, systemd TimeoutStopSec,
+        WSL session close).
+
+        Requires SQLite ≥ 3.27.0 (2019-02-07).  Our minimum supported version
+        is 3.35.0 (Ubuntu 20.04 / Debian 11).
         """
-        # VACUUM cannot be executed inside a transaction.
         with self._lock:
-            # Best-effort WAL checkpoint first, then VACUUM.
+            # Best-effort WAL checkpoint to flush pending writes.
             try:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception:
                 pass
-            self._conn.execute("VACUUM")
+
+            tmp_path = self.db_path.with_suffix(".db.vacuum-tmp")
+            try:
+                self._conn.execute(f"VACUUM INTO '{tmp_path}'")
+                # Atomic replacement — the OS guarantees the old file stays
+                # intact until the rename completes.  On ext4/xfs/btrfs this
+                # is a single metadata operation.
+                os.replace(tmp_path, self.db_path)
+            finally:
+                # Clean up temp file if the VACUUM INTO failed or if os.replace
+                # didn't consume it (shouldn't happen, but defense-in-depth).
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def maybe_auto_prune_and_vacuum(
         self,

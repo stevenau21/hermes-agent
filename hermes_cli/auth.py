@@ -390,14 +390,6 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("TOKENHUB_API_KEY",),
         base_url_env_var="TOKENHUB_BASE_URL",
     ),
-    "ollama-cloud": ProviderConfig(
-        id="ollama-cloud",
-        name="Ollama Cloud",
-        auth_type="api_key",
-        inference_base_url=DEFAULT_OLLAMA_CLOUD_BASE_URL,
-        api_key_env_vars=("OLLAMA_API_KEY",),
-        base_url_env_var="OLLAMA_BASE_URL",
-    ),
     "bedrock": ProviderConfig(
         id="bedrock",
         name="AWS Bedrock",
@@ -1389,7 +1381,7 @@ def resolve_provider(
         "kilo": "kilocode", "kilo-code": "kilocode", "kilo-gateway": "kilocode",
         "lmstudio": "lmstudio", "lm-studio": "lmstudio", "lm_studio": "lmstudio",
         # Local server aliases — route through the generic custom provider
-        "ollama": "custom", "ollama_cloud": "ollama-cloud",
+        "ollama": "custom", "ollama-cloud": "custom",
         "vllm": "custom", "llamacpp": "custom",
         "llama.cpp": "custom", "llama-cpp": "custom",
     }

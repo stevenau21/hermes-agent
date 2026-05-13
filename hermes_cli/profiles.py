@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
+import yaml
+
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 # Directories bootstrapped inside every new profile
@@ -48,6 +50,27 @@ _PROFILE_DIRS = [
     # See hermes_constants.get_subprocess_home() and issue #4426.
     "home",
 ]
+
+# Fresh profiles should be usable immediately without falling through to
+# OpenRouter. They can still choose any model available from the user's Ollama
+# daemon (local models or ``:cloud`` tags); these defaults only fix transport
+# and SDK auth routing.
+_OLLAMA_CLOUD_DEFAULT_MODEL = "kimi-k2.6:cloud"
+_OLLAMA_CLOUD_PROVIDER = "ollama-cloud"
+_OLLAMA_CLOUD_BASE_URL = "http://localhost:11434/v1"
+_OLLAMA_CLOUD_API_KEY = "ollama"
+_OLLAMA_CLOUD_AUXILIARY_TIMEOUTS = {
+    "vision": 120,
+    "web_extract": 360,
+    "compression": 120,
+    "session_search": 30,
+    "skills_hub": 30,
+    "approval": 30,
+    "mcp": 30,
+    "title_generation": 30,
+    "triage_specifier": 120,
+    "curator": 600,
+}
 
 # Files copied during --clone (if they exist in the source)
 _CLONE_CONFIG_FILES = [
@@ -230,6 +253,128 @@ def _get_default_hermes_home() -> Path:
     """
     from hermes_constants import get_default_hermes_root
     return get_default_hermes_root()
+
+
+def _context_length_for_ollama_model(model_name: str, configured: object = None) -> Optional[int]:
+    """Return a conservative context override for a fresh Ollama profile."""
+    if isinstance(configured, int) and configured > 0:
+        return configured
+    if isinstance(configured, str) and configured.strip().isdigit():
+        value = int(configured.strip())
+        if value > 0:
+            return value
+
+    model_norm = (model_name or "").strip().lower()
+    if "deepseek-v4-pro" in model_norm:
+        return 1_000_000
+    if "kimi" in model_norm:
+        return 262_144
+    return None
+
+
+def _default_ollama_model_for_new_profile() -> tuple[str, Optional[int]]:
+    """Inherit the default model only when the default profile is already Ollama-routed.
+
+    This lets users pick any Ollama model globally while preventing a stale
+    OpenRouter/Anthropic/etc. default from being copied into a fresh profile
+    whose transport is intentionally Ollama-only.
+    """
+    default_model = _OLLAMA_CLOUD_DEFAULT_MODEL
+    configured_context: object = None
+    config_path = _get_default_hermes_home() / "config.yaml"
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return default_model, _context_length_for_ollama_model(default_model)
+
+    model_cfg = cfg.get("model", {})
+    if not isinstance(model_cfg, dict):
+        return default_model, _context_length_for_ollama_model(default_model)
+
+    provider = str(model_cfg.get("provider", "") or "").strip().lower()
+    base_url = str(model_cfg.get("base_url", "") or "").strip().lower()
+    candidate = str(model_cfg.get("default", "") or "").strip()
+    configured_context = model_cfg.get("context_length")
+    is_ollama_routed = (
+        provider in {_OLLAMA_CLOUD_PROVIDER, "ollama", "custom"}
+        or base_url.startswith("http://localhost:11434")
+        or base_url.startswith("http://127.0.0.1:11434")
+    )
+    if candidate and is_ollama_routed:
+        default_model = candidate
+    return default_model, _context_length_for_ollama_model(default_model, configured_context)
+
+
+def _ollama_cloud_profile_config(profile_dir: Path) -> dict:
+    model_name, context_length = _default_ollama_model_for_new_profile()
+    model_config = {
+        "default": model_name,
+        "provider": _OLLAMA_CLOUD_PROVIDER,
+        "base_url": _OLLAMA_CLOUD_BASE_URL,
+        "api_key": _OLLAMA_CLOUD_API_KEY,
+    }
+    if context_length is not None:
+        model_config["context_length"] = context_length
+
+    auxiliary = {}
+    for task, timeout in _OLLAMA_CLOUD_AUXILIARY_TIMEOUTS.items():
+        task_config = {
+            "provider": _OLLAMA_CLOUD_PROVIDER,
+            "model": model_name,
+            "base_url": _OLLAMA_CLOUD_BASE_URL,
+            "api_key": _OLLAMA_CLOUD_API_KEY,
+            "timeout": timeout,
+            "extra_body": {},
+        }
+        if task == "vision":
+            task_config["download_timeout"] = 30
+        if task == "session_search":
+            task_config["max_concurrency"] = 3
+        auxiliary[task] = task_config
+
+    return {
+        "model": model_config,
+        "auxiliary": auxiliary,
+        "compression": {
+            "enabled": True,
+            "threshold": 0.50,
+            "target_ratio": 0.20,
+        },
+        "memory": {
+            "memory_enabled": True,
+            "user_profile_enabled": True,
+        },
+        "terminal": {
+            "cwd": str(profile_dir / "workspace"),
+            "timeout": 180,
+        },
+    }
+
+
+def _bootstrap_fresh_profile_ollama_cloud(profile_dir: Path) -> None:
+    """Write Ollama Cloud routing defaults for a freshly-created profile."""
+    config_path = profile_dir / "config.yaml"
+    if not config_path.exists():
+        config_path.write_text(
+            yaml.safe_dump(
+                _ollama_cloud_profile_config(profile_dir),
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+
+    env_path = profile_dir / ".env"
+    text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = text.splitlines()
+    if not any(
+        line.startswith("OLLAMA_API_KEY=") and line.split("=", 1)[1].strip()
+        for line in lines
+    ):
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"OLLAMA_API_KEY={_OLLAMA_CLOUD_API_KEY}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _get_active_profile_path() -> Path:
@@ -643,6 +788,8 @@ def create_profile(
                     dst = profile_dir / relpath
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
+        else:
+            _bootstrap_fresh_profile_ollama_cloud(profile_dir)
 
     # Seed a default SOUL.md so the user has a file to customize immediately.
     # Skipped when the profile already has one (from --clone / --clone-all).

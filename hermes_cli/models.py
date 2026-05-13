@@ -2956,15 +2956,12 @@ _OLLAMA_CLOUD_CACHE_TTL = 3600  # 1 hour
 
 
 def _strip_ollama_cloud_suffix(model_id: str) -> str:
-    """Strip :cloud / -cloud suffixes that models.dev appends to Ollama Cloud IDs.
+    """NO-OP: previously stripped ':cloud' / '-cloud' suffixes, but those ARE
+    the real Ollama model tags (e.g. 'kimi-k2.6:cloud'). Stripping them causes
+    the picker to show fantasy bare names that 404 when sent to Ollama.
 
-    The live API uses clean IDs (e.g. 'kimi-k2.6') while models.dev sometimes
-    returns them as 'kimi-k2.6:cloud'. Normalising before the dedup merge
-    prevents duplicate entries in the merged model list.
+    Kept as a no-op for call-site compatibility; removal tracked in cleanup.
     """
-    for suffix in (":cloud", "-cloud"):
-        if model_id.endswith(suffix):
-            return model_id[: -len(suffix)]
     return model_id
 
 
@@ -3034,44 +3031,45 @@ def fetch_ollama_cloud_models(
         if cached is not None:
             return cached["models"]
 
-    # 2. Live API probe
+    # 2. Live API probe (OpenAI-compatible /v1/models)
     if not api_key:
         api_key = os.getenv("OLLAMA_API_KEY", "")
     if not base_url:
-        base_url = os.getenv("OLLAMA_BASE_URL", "") or "https://ollama.com/v1"
+        base_url = os.getenv("OLLAMA_BASE_URL", "") or "http://localhost:11434/v1"
 
-    live_models: list[str] = []
-    if api_key:
-        result = fetch_api_models(api_key, base_url, timeout=8.0)
-        if result:
-            live_models = result
+    openai_models: list[str] = fetch_api_models(api_key, base_url, timeout=8.0) or []
 
-    # 3. models.dev registry
-    mdev_models: list[str] = []
-    try:
-        from agent.models_dev import list_agentic_models
-        mdev_models = list_agentic_models("ollama-cloud")
-    except Exception:
-        pass
+    # 3. Native /api/tags — ALWAYS probe because it preserves real tag suffixes
+    # like ':cloud' that /v1/models strips.  Use /api/tags names as canonical.
+    tags_models: list[str] = []
+    if base_url:
+        import urllib.request, json
+        tags_url = base_url.rstrip("/").replace("/v1", "/api/tags")
+        try:
+            req = urllib.request.Request(
+                tags_url,
+                headers={"User-Agent": "Hermes-Agent/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                data = json.loads(resp.read().decode())
+                tags_models = [m["name"] for m in data.get("models", [])]
+        except Exception:
+            pass
 
-    # 4. Merge: live first, then models.dev additions (deduped, order-preserving)
-    if live_models or mdev_models:
-        seen: set[str] = set()
-        merged: list[str] = []
-        for m in live_models:
-            if m and m not in seen:
-                seen.add(m)
-                merged.append(m)
-        for m in mdev_models:
-            normalized = _strip_ollama_cloud_suffix(m)
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                merged.append(normalized)
-        if merged:
-            _save_ollama_cloud_cache(merged)
-            return merged
+    # 4. Merge: /api/tags is authoritative; /v1/models fills any extras.
+    # For local Ollama, models.dev is intentionally excluded — it lists
+    # fantasy names that don't exist on the user's machine.
+    seen: set[str] = set()
+    merged_live: list[str] = []
+    for m in tags_models + openai_models:
+        if m and m not in seen:
+            seen.add(m)
+            merged_live.append(m)
+    if merged_live:
+        _save_ollama_cloud_cache(merged_live)
+        return merged_live
 
-    # Total failure — return stale cache if available (ignore TTL)
+    # Total failure — return stale cache if available
     stale = _load_ollama_cloud_cache(ignore_ttl=True)
     if stale is not None:
         return stale["models"]

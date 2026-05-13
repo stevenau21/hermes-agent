@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+import yaml
 
 from hermes_cli.profiles import (
     normalize_profile_name,
@@ -160,6 +161,73 @@ class TestCreateProfile:
         for subdir in ["memories", "sessions", "skills", "skins", "logs",
                         "plans", "workspace", "cron"]:
             assert (profile_dir / subdir).is_dir(), f"Missing subdir: {subdir}"
+
+    def test_fresh_profile_bootstraps_ollama_cloud_routing(self, profile_env):
+        profile_dir = create_profile("coder", no_alias=True)
+
+        cfg = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        assert cfg["model"]["default"] == "kimi-k2.6:cloud"
+        assert cfg["model"]["provider"] == "ollama-cloud"
+        assert cfg["model"]["base_url"] == "http://localhost:11434/v1"
+        assert cfg["model"]["api_key"] == "ollama"
+        assert cfg["model"]["context_length"] == 262144
+        assert cfg["terminal"]["cwd"] == str(profile_dir / "workspace")
+
+        for task in [
+            "vision",
+            "web_extract",
+            "compression",
+            "session_search",
+            "skills_hub",
+            "approval",
+            "mcp",
+            "title_generation",
+            "triage_specifier",
+            "curator",
+        ]:
+            assert cfg["auxiliary"][task]["provider"] == "ollama-cloud"
+            assert cfg["auxiliary"][task]["model"] == "kimi-k2.6:cloud"
+            assert cfg["auxiliary"][task]["base_url"] == "http://localhost:11434/v1"
+            assert cfg["auxiliary"][task]["api_key"] == "ollama"
+
+        assert "OLLAMA_API_KEY=ollama" in (profile_dir / ".env").read_text()
+
+    def test_fresh_profile_inherits_default_ollama_model_only(self, profile_env):
+        tmp_path = profile_env
+        default_home = tmp_path / ".hermes"
+        (default_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "model": {
+                    "default": "deepseek-v4-pro:cloud",
+                    "provider": "ollama-cloud",
+                    "context_length": 1000000,
+                }
+            })
+        )
+
+        profile_dir = create_profile("coder", no_alias=True)
+        cfg = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        assert cfg["model"]["default"] == "deepseek-v4-pro:cloud"
+        assert cfg["model"]["provider"] == "ollama-cloud"
+        assert cfg["model"]["context_length"] == 1000000
+        assert cfg["auxiliary"]["compression"]["model"] == "deepseek-v4-pro:cloud"
+
+    def test_fresh_profile_ignores_non_ollama_default_model(self, profile_env):
+        tmp_path = profile_env
+        default_home = tmp_path / ".hermes"
+        (default_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "model": {
+                    "default": "openrouter/anthropic/claude-sonnet-4",
+                    "provider": "openrouter",
+                }
+            })
+        )
+
+        profile_dir = create_profile("coder", no_alias=True)
+        cfg = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        assert cfg["model"]["default"] == "kimi-k2.6:cloud"
+        assert cfg["model"]["provider"] == "ollama-cloud"
 
     def test_duplicate_raises_file_exists(self, profile_env):
         create_profile("coder", no_alias=True)

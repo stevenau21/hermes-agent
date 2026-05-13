@@ -44,6 +44,11 @@ class HermesOverlay:
 
 
 HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
+    "custom": HermesOverlay(
+        transport="openai_chat",
+        auth_type="api_key",
+        base_url_env_var="OLLAMA_HOST",
+    ),
     "openrouter": HermesOverlay(
         transport="openai_chat",
         is_aggregator=True,
@@ -172,22 +177,14 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
     ),
     "tencent-tokenhub": HermesOverlay(
         transport="openai_chat",
-        base_url_env_var="TOKENHUB_BASE_URL",
+        extra_env_vars=("TENCENT_TOKENHUB_API_KEY",),
+        base_url_override="https://tokenhub.tencentmaas.com/v1",
+        base_url_env_var="TENCENT_TOKENHUB_BASE_URL",
     ),
     "arcee": HermesOverlay(
         transport="openai_chat",
         base_url_override="https://api.arcee.ai/api/v1",
         base_url_env_var="ARCEE_BASE_URL",
-    ),
-    "gmi": HermesOverlay(
-        transport="openai_chat",
-        extra_env_vars=("GMI_API_KEY",),
-        base_url_override="https://api.gmi-serving.com/v1",
-        base_url_env_var="GMI_BASE_URL",
-    ),
-    "ollama-cloud": HermesOverlay(
-        transport="openai_chat",
-        base_url_env_var="OLLAMA_BASE_URL",
     ),
     # Azure Foundry: supports both OpenAI-style and Anthropic-style endpoints.
     # The transport is determined at runtime from config.yaml model.api_mode.
@@ -337,7 +334,8 @@ ALIASES: Dict[str, str] = {
     "lmstudio": "lmstudio",
     "lm-studio": "lmstudio",
     "lm_studio": "lmstudio",
-    "ollama": "custom",  # bare "ollama" = local; use "ollama-cloud" for cloud
+    "ollama": "custom",  # bare "ollama" = local
+    "ollama-cloud": "custom",  # ollama Cloud → generic custom endpoint
     "vllm": "local",
     "llamacpp": "local",
     "llama.cpp": "local",
@@ -350,6 +348,7 @@ ALIASES: Dict[str, str] = {
 # not in the catalog.
 
 _LABEL_OVERRIDES: Dict[str, str] = {
+    "custom": "Custom / Ollama",
     "nous": "Nous Portal",
     "openai-codex": "OpenAI Codex",
     "copilot-acp": "GitHub Copilot ACP",
@@ -360,7 +359,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "lmstudio": "LM Studio",
     "local": "Local endpoint",
     "bedrock": "AWS Bedrock",
-    "ollama-cloud": "Ollama Cloud",
 }
 
 

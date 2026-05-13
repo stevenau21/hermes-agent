@@ -31,6 +31,8 @@ from hermes_cli.config import get_compatible_custom_providers, load_config
 from hermes_constants import OPENROUTER_BASE_URL
 from utils import base_url_host_matches, base_url_hostname
 
+OLLAMA_LIKE_PROVIDERS = {"custom", "ollama", "ollama-cloud"}
+
 
 def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
@@ -52,7 +54,7 @@ def _config_base_url_trustworthy_for_bare_custom(cfg_base_url: str, cfg_provider
     bu = (cfg_base_url or "").strip()
     if not bu:
         return False
-    if cfg_provider_norm == "custom":
+    if cfg_provider_norm in {"custom", "ollama", "ollama-cloud"}:
         return True
     if base_url_host_matches(bu, "openrouter.ai"):
         return False
@@ -141,8 +143,8 @@ def _provider_supports_explicit_api_mode(provider: Optional[str], configured_pro
     normalized_configured = (configured_provider or "").strip().lower()
     if not normalized_configured:
         return True
-    if normalized_provider == "custom":
-        return normalized_configured == "custom" or normalized_configured.startswith("custom:")
+    if normalized_provider in OLLAMA_LIKE_PROVIDERS:
+        return normalized_configured in OLLAMA_LIKE_PROVIDERS or normalized_configured.startswith("custom:")
     return normalized_configured == normalized_provider
 
 
@@ -349,7 +351,7 @@ def _try_resolve_from_custom_pool(
 
 def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, Any]]:
     requested_norm = _normalize_custom_provider_name(requested_provider or "")
-    if not requested_norm or requested_norm == "custom":
+    if not requested_norm or requested_norm in OLLAMA_LIKE_PROVIDERS:
         return None
 
     # Raw names should only map to custom providers when they are not already
@@ -490,7 +492,7 @@ def _resolve_named_custom_runtime(
     # from a `model_aliases:` direct-alias resolution) — build a runtime
     # directly so the alias's base_url actually takes effect.
     requested_norm = (requested_provider or "").strip().lower()
-    if requested_norm == "custom" and explicit_base_url:
+    if requested_norm in OLLAMA_LIKE_PROVIDERS and explicit_base_url:
         base_url = explicit_base_url.strip().rstrip("/")
         # Check credential pool first — mirrors the named-custom-provider path
         # so bare `provider: custom` with a configured custom_providers entry
@@ -592,7 +594,7 @@ def _resolve_openrouter_runtime(
         if requested_norm == "auto":
             if not cfg_provider or cfg_provider == "auto":
                 use_config_base_url = True
-        elif requested_norm == "custom" and _config_base_url_trustworthy_for_bare_custom(
+        elif requested_norm in OLLAMA_LIKE_PROVIDERS and _config_base_url_trustworthy_for_bare_custom(
             cfg_base_url, cfg_provider
         ):
             use_config_base_url = True
@@ -601,9 +603,17 @@ def _resolve_openrouter_runtime(
         (explicit_base_url or "").strip()
         or env_custom_base_url
         or (cfg_base_url.strip() if use_config_base_url else "")
-        or env_openrouter_base_url
-        or OPENROUTER_BASE_URL
     ).rstrip("/")
+
+    # Default base_url for ollama-cloud when nothing else is configured.
+    # This ensures the alias routes to the local Ollama instance by default,
+    # before falling back to the OpenRouter constant.
+    if requested_norm == "ollama-cloud" and not base_url:
+        base_url = (os.getenv("OLLAMA_BASE_URL", "").strip() or "http://localhost:11434/v1").rstrip("/")
+
+    # Final fallback to OpenRouter if still empty.
+    if not base_url:
+        base_url = (env_openrouter_base_url or OPENROUTER_BASE_URL).rstrip("/")
 
     # Choose API key based on whether the resolved base_url targets OpenRouter.
     # When hitting OpenRouter, prefer OPENROUTER_API_KEY (issue #289).
@@ -625,7 +635,11 @@ def _resolve_openrouter_runtime(
         # "ollama.com" (e.g. http://127.0.0.1/ollama.com/v1) or whose
         # hostname is a look-alike (ollama.com.attacker.test) must not
         # receive the Ollama credential. See GHSA-76xc-57q6-vm5m.
-        _is_ollama_url = base_url_host_matches(base_url, "ollama.com")
+        _is_ollama_url = (
+            base_url_host_matches(base_url, "ollama.com")
+            or base_url_host_matches(base_url, "localhost")
+            or base_url_host_matches(base_url, "127.0.0.1")
+        )
         api_key_candidates = [
             explicit_api_key,
             (cfg_api_key if use_config_base_url else ""),
@@ -644,7 +658,7 @@ def _resolve_openrouter_runtime(
     # name instead of silently relabeling to "openrouter" (#2562).
     # Also provide a placeholder API key for local servers that don't require
     # authentication — the OpenAI SDK requires a non-empty api_key string.
-    effective_provider = "custom" if requested_norm == "custom" else "openrouter"
+    effective_provider = "custom" if requested_norm in OLLAMA_LIKE_PROVIDERS else "openrouter"
 
     # For custom endpoints, check if a credential pool exists
     if effective_provider == "custom" and base_url:
@@ -652,7 +666,7 @@ def _resolve_openrouter_runtime(
         # fixing credential mix-ups when multiple custom providers share a base_url.
         pool_result = _try_resolve_from_custom_pool(
             base_url, effective_provider, _parse_api_mode(model_cfg.get("api_mode")),
-            provider_name=requested_provider if requested_norm != "custom" else None,
+            provider_name=requested_provider if requested_norm not in OLLAMA_LIKE_PROVIDERS else None,
         )
         if pool_result:
             return pool_result
@@ -990,7 +1004,7 @@ def resolve_runtime_provider(
             or env_openai_base_url
             or env_openrouter_base_url
         )
-        if cfg_base_url and cfg_provider in {"auto", "custom"}:
+        if cfg_base_url and cfg_provider in {"auto", "custom", "ollama", "ollama-cloud"}:
             has_custom_endpoint = True
         has_runtime_override = bool(explicit_api_key or explicit_base_url)
         should_use_pool = (
