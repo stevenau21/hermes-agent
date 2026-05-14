@@ -1903,20 +1903,15 @@ def delegate_task(
     max_iterations: Optional[int] = None,
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
-    role: Optional[str] = None,
+    model: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
 
     Supports two modes:
-      - Single: provide goal (+ optional context, toolsets, role)
-      - Batch:  provide tasks array [{goal, context, toolsets, role}, ...]
-
-    The 'role' parameter controls whether a child can further delegate:
-    'leaf' (default) cannot; 'orchestrator' retains the delegation
-    toolset and can spawn its own workers, bounded by
-    delegation.max_spawn_depth.  Per-task role beats the top-level one.
+      - Single: provide goal (+ optional context, toolsets, model)
+      - Batch:  provide tasks array [{goal, context, toolsets, model}, ...]
 
     Returns JSON with results array, one entry per task.
     """
@@ -1996,9 +1991,7 @@ def delegate_task(
             )
         task_list = tasks
     elif goal and isinstance(goal, str) and goal.strip():
-        task_list = [
-            {"goal": goal, "context": context, "toolsets": toolsets, "role": top_role}
-        ]
+        task_list = [{"goal": goal, "context": context, "toolsets": toolsets, "model": model}]
     else:
         return tool_error("Provide either 'goal' (single task) or 'tasks' (batch).")
 
@@ -2039,16 +2032,10 @@ def delegate_task(
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
             child = _build_child_agent(
-                task_index=i,
-                goal=t["goal"],
-                context=t.get("context"),
-                toolsets=t.get("toolsets") or toolsets,
-                model=creds["model"],
-                max_iterations=effective_max_iter,
-                task_count=n_tasks,
-                parent_agent=parent_agent,
-                override_provider=creds["provider"],
-                override_base_url=creds["base_url"],
+                task_index=i, goal=t["goal"], context=t.get("context"),
+                toolsets=t.get("toolsets") or toolsets, model=t.get("model") or creds["model"],
+                max_iterations=effective_max_iter, task_count=n_tasks, parent_agent=parent_agent,
+                override_provider=creds["provider"], override_base_url=creds["base_url"],
                 override_api_key=creds["api_key"],
                 override_api_mode=creds["api_mode"],
                 override_acp_command=t.get("acp_command")
@@ -2702,18 +2689,37 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "model": {
+                            "type": "string",
+                            "description": (
+                                "Per-task model override. Takes precedence over top-level "
+                                "'model' and delegation.model in config.yaml."
+                            ),
+                        },
                     },
                     "required": ["goal"],
                 },
                 # No maxItems — the runtime limit is configurable via
                 # delegation.max_concurrent_children (default 3) and
                 # enforced with a clear error in delegate_task().
-                "description": "(rebuilt at get_definitions() time)",
+                "description": (
+                    "Batch mode: tasks to run in parallel (limit configurable via delegation.max_concurrent_children, default 3). Each gets "
+                    "its own subagent with isolated context and terminal session. "
+                    "When provided, top-level goal/context/toolsets/model are ignored."
+                ),
             },
             "role": {
                 "type": "string",
                 "enum": ["leaf", "orchestrator"],
                 "description": "(rebuilt at get_definitions() time)",
+            },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Model for the subagent to use (e.g. 'kimi-k2.6:cloud', 'glm-5.1:cloud'). "
+                    "When set, overrides the delegation.model configured in config.yaml. "
+                    "Useful for routing specific tasks to different models."
+                ),
             },
             "acp_command": {
                 "type": "string",
@@ -2758,9 +2764,8 @@ registry.register(
         max_iterations=args.get("max_iterations"),
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
-        role=args.get("role"),
-        parent_agent=kw.get("parent_agent"),
-    ),
+        model=args.get("model"),
+        parent_agent=kw.get("parent_agent")),
     check_fn=check_delegate_requirements,
     emoji="🔀",
     dynamic_schema_overrides=_build_dynamic_schema_overrides,
